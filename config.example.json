@@ -1,0 +1,19 @@
+{
+  "discordToken": "YOUR_DISCORD_BOT_TOKEN",
+  "clientId": "YOUR_DISCORD_APPLICATION_CLIENT_ID",
+  "guildIds": ["YOUR_GUILD_ID"],
+  "allowedRoleIds": ["ROLE_ID_FOR_ADMINS"],
+  "allowedUserIds": ["YOUR_DISCORD_USER_ID"],
+  "services": [
+    {
+      "alias": "Resonite Headless",
+      "unit": "resonite-headless.service",
+      "description": "Resonite headless server instance"
+    },
+    {
+      "alias": "Nginx",
+      "unit": "nginx.service",
+      "description": "Nginx web server"
+    }
+  ]
+}
