@@ -1,0 +1,9 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    volumes:
+      # Mount the config file into the container
+      - ./config.json:/app/config.json:ro
+      # Mount the host D-Bus socket so systemctl can talk to the host's systemd
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket

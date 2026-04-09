@@ -33,16 +33,32 @@ export interface ActionResult {
 }
 
 /**
- * Execute a systemctl command via sudo.
- * This expects the sudoers file to be configured to allow
- * the bot user to run `systemctl` without a password for the
- * whitelisted services.
+ * Whether to skip `sudo` when invoking systemctl.
+ * In Docker environments where the host D-Bus socket is mounted,
+ * the container runs as root and can call systemctl directly.
+ * Set the environment variable SYSTEMCTL_NO_SUDO=1 to enable this.
+ */
+const NO_SUDO = process.env["SYSTEMCTL_NO_SUDO"] === "1";
+
+/**
+ * Execute a systemctl command.
+ *
+ * - Default (host): runs `sudo systemctl <action> <unit>`.
+ *   Requires a sudoers entry for the bot user.
+ * - Docker (SYSTEMCTL_NO_SUDO=1): runs `systemctl <action> <unit>` directly.
+ *   Requires the host D-Bus socket to be mounted into the container.
  */
 async function runSystemctl(
   action: string,
   unit: string,
   extraArgs: string[] = [],
 ): Promise<{ stdout: string; stderr: string }> {
+  if (NO_SUDO) {
+    return execFileAsync("systemctl", [action, unit, ...extraArgs], {
+      timeout: 30_000,
+      env: { ...process.env, DBUS_SYSTEM_BUS_ADDRESS: process.env["DBUS_SYSTEM_BUS_ADDRESS"] ?? "unix:path=/run/dbus/system_bus_socket" },
+    });
+  }
   return execFileAsync("sudo", ["systemctl", action, unit, ...extraArgs], {
     timeout: 30_000,
   });

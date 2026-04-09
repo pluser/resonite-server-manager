@@ -82,6 +82,25 @@ sudo visudo -c -f /etc/sudoers.d/resonite-server-manager
 
 ### 4. Install & Run
 
+#### Option A: Docker (recommended)
+
+```bash
+cp config.example.json config.json
+# Edit config.json with your values
+
+docker compose up -d
+```
+
+This mounts the host's D-Bus socket (`/run/dbus/system_bus_socket`) into the container, allowing `systemctl` inside the container to control the host's systemd services directly. No sudoers configuration is needed when running via Docker.
+
+To rebuild after code changes:
+
+```bash
+docker compose up -d --build
+```
+
+#### Option B: Run directly on host
+
 ```bash
 npm install
 npm run build
@@ -100,9 +119,12 @@ You can also pass a custom config path:
 npm start -- /path/to/config.json
 ```
 
+When running directly on the host, [sudoers configuration](#3-sudoers-configuration) is required.
+
 ## Security Notes
 
 - Only services explicitly listed in `config.json` can be managed
 - Service aliases are exposed as Discord slash command choices (no free-text input), preventing injection
-- The sudoers configuration should be scoped to only the specific units needed
+- The sudoers configuration should be scoped to only the specific units needed (host-only setup)
 - Authorization can be restricted by Discord role IDs and/or user IDs
+- When using Docker, the container requires access to the host's D-Bus socket. This grants systemd control, so ensure the container image and config are trusted
