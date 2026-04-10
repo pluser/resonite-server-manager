@@ -74,8 +74,11 @@ async function runBusctl(
 ): Promise<{ stdout: string; stderr: string }> {
   return execFileAsync(
     "busctl",
-    ["--bus-path=" + DBUS_SOCKET, ...args],
-    { timeout: 30_000 },
+    args,
+    {
+      timeout: 30_000,
+      env: { ...process.env, DBUS_SYSTEM_BUS_ADDRESS: DBUS_SOCKET },
+    },
   );
 }
 
