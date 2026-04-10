@@ -35,7 +35,7 @@ async function main(): Promise<void> {
     intents: [GatewayIntentBits.Guilds],
   });
 
-  client.once("ready", (c) => {
+  client.once("clientReady", (c) => {
     console.log(`Logged in as ${c.user.tag}`);
   });
 
