@@ -62,6 +62,15 @@ async function main(): Promise<void> {
 
   // Login
   await client.login(config.discordToken);
+
+  // Graceful shutdown on SIGINT (Ctrl+C) / SIGTERM
+  const shutdown = () => {
+    console.log("Shutting down...");
+    client.destroy();
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
 main().catch((err) => {
