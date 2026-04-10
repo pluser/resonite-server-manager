@@ -33,36 +33,96 @@ export interface ActionResult {
 }
 
 /**
- * Whether to skip `sudo` when invoking systemctl.
- * In Docker environments where the host D-Bus socket is mounted,
- * the container runs as root and can call systemctl directly.
+ * Whether to use busctl instead of systemctl.
+ *
+ * In Docker environments the host D-Bus socket is mounted into the
+ * container, but `systemctl` refuses to run because PID 1 is not
+ * systemd.  `busctl` has no such restriction and talks to D-Bus
+ * directly.
+ *
  * Set the environment variable SYSTEMCTL_NO_SUDO=1 to enable this.
  */
-const NO_SUDO = process.env["SYSTEMCTL_NO_SUDO"] === "1";
+const USE_DBUS = process.env["SYSTEMCTL_NO_SUDO"] === "1";
+
+/** D-Bus socket path used by busctl in Docker mode */
+const DBUS_SOCKET =
+  process.env["DBUS_SYSTEM_BUS_ADDRESS"] ??
+  "unix:path=/run/dbus/system_bus_socket";
+
+// ---------------------------------------------------------------------------
+// Low-level helpers
+// ---------------------------------------------------------------------------
 
 /**
- * Execute a systemctl command.
- *
- * - Default (host): runs `sudo systemctl <action> <unit>`.
- *   Requires a sudoers entry for the bot user.
- * - Docker (SYSTEMCTL_NO_SUDO=1): runs `systemctl <action> <unit>` directly.
- *   Requires the host D-Bus socket to be mounted into the container.
+ * Run `sudo systemctl <action> <unit>` on the host.
  */
 async function runSystemctl(
   action: string,
   unit: string,
   extraArgs: string[] = [],
 ): Promise<{ stdout: string; stderr: string }> {
-  if (NO_SUDO) {
-    return execFileAsync("systemctl", [action, unit, ...extraArgs], {
-      timeout: 30_000,
-      env: { ...process.env, DBUS_SYSTEM_BUS_ADDRESS: process.env["DBUS_SYSTEM_BUS_ADDRESS"] ?? "unix:path=/run/dbus/system_bus_socket" },
-    });
-  }
   return execFileAsync("sudo", ["systemctl", action, unit, ...extraArgs], {
     timeout: 30_000,
   });
 }
+
+/**
+ * Run `busctl` with the mounted D-Bus socket.
+ */
+async function runBusctl(
+  args: string[],
+): Promise<{ stdout: string; stderr: string }> {
+  return execFileAsync(
+    "busctl",
+    ["--bus-path=" + DBUS_SOCKET, ...args],
+    { timeout: 30_000 },
+  );
+}
+
+/**
+ * Read a single string property from a systemd unit object via D-Bus.
+ *
+ *   busctl get-property org.freedesktop.systemd1 <objectPath> \
+ *     org.freedesktop.systemd1.Unit <property>
+ *
+ * Returns the unquoted string value.
+ */
+async function getUnitProperty(
+  objectPath: string,
+  property: string,
+): Promise<string> {
+  const { stdout } = await runBusctl([
+    "get-property",
+    "org.freedesktop.systemd1",
+    objectPath,
+    "org.freedesktop.systemd1.Unit",
+    property,
+  ]);
+  // busctl output looks like: s "active"
+  const match = stdout.match(/^s\s+"(.*)"\s*$/);
+  return match ? match[1] : stdout.trim();
+}
+
+/**
+ * Convert a systemd unit name to its D-Bus object path.
+ *
+ * systemd escapes unit names for D-Bus: every byte that is not [A-Za-z0-9]
+ * is replaced with `_XX` where XX is the hex value.
+ */
+function unitToObjectPath(unit: string): string {
+  const escaped = Array.from(unit)
+    .map((ch) =>
+      /[A-Za-z0-9]/.test(ch)
+        ? ch
+        : `_${ch.charCodeAt(0).toString(16).padStart(2, "0")}`,
+    )
+    .join("");
+  return `/org/freedesktop/systemd1/unit/${escaped}`;
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
 
 /**
  * Get the current status of a systemd service.
@@ -70,7 +130,39 @@ async function runSystemctl(
 export async function getServiceStatus(
   service: ServiceEntry,
 ): Promise<ServiceStatus> {
-  // Use `show` to get machine-readable properties
+  if (USE_DBUS) {
+    return getServiceStatusViaDbus(service);
+  }
+  return getServiceStatusViaSystemctl(service);
+}
+
+/**
+ * Execute a service action (start/stop/restart).
+ */
+export async function executeServiceAction(
+  service: ServiceEntry,
+  action: ServiceAction,
+): Promise<ActionResult> {
+  if (!ALLOWED_ACTIONS.has(action)) {
+    return { success: false, message: `Invalid action: ${action}` };
+  }
+  if (action === "status") {
+    return { success: false, message: "Use getServiceStatus() for status" };
+  }
+
+  if (USE_DBUS) {
+    return executeServiceActionViaDbus(service, action);
+  }
+  return executeServiceActionViaSystemctl(service, action);
+}
+
+// ---------------------------------------------------------------------------
+// Host (systemctl + sudo)
+// ---------------------------------------------------------------------------
+
+async function getServiceStatusViaSystemctl(
+  service: ServiceEntry,
+): Promise<ServiceStatus> {
   let activeState = "unknown";
   let subState = "unknown";
   let description = "";
@@ -80,7 +172,6 @@ export async function getServiceStatus(
       "--property=ActiveState,SubState,Description",
       "--no-pager",
     ]);
-
     for (const line of stdout.split("\n")) {
       const [key, ...rest] = line.split("=");
       const value = rest.join("=");
@@ -104,7 +195,6 @@ export async function getServiceStatus(
       err instanceof Error ? err.message : "Failed to query service";
   }
 
-  // Also get the human-readable status output
   let raw = "";
   try {
     const { stdout } = await runSystemctl("status", service.unit, [
@@ -131,27 +221,98 @@ export async function getServiceStatus(
   return { activeState, subState, description, raw };
 }
 
-/**
- * Execute a service action (start/stop/restart).
- */
-export async function executeServiceAction(
+async function executeServiceActionViaSystemctl(
   service: ServiceEntry,
   action: ServiceAction,
 ): Promise<ActionResult> {
-  if (!ALLOWED_ACTIONS.has(action)) {
-    return { success: false, message: `Invalid action: ${action}` };
-  }
-
-  if (action === "status") {
-    return { success: false, message: "Use getServiceStatus() for status" };
-  }
-
   try {
     const { stderr } = await runSystemctl(action, service.unit);
     return {
       success: true,
       message: `Successfully executed '${action}' on ${service.alias} (${service.unit})`,
       stderr: stderr || undefined,
+    };
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : `Failed to ${action} service`;
+    let stderr: string | undefined;
+    if (
+      err &&
+      typeof err === "object" &&
+      "stderr" in err &&
+      typeof (err as { stderr: unknown }).stderr === "string"
+    ) {
+      stderr = (err as { stderr: string }).stderr;
+    }
+    return { success: false, message, stderr };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Docker (busctl over mounted D-Bus socket)
+// ---------------------------------------------------------------------------
+
+/** Map CLI action names to systemd D-Bus method names */
+const DBUS_METHODS: Record<string, string> = {
+  start: "StartUnit",
+  stop: "StopUnit",
+  restart: "RestartUnit",
+};
+
+async function getServiceStatusViaDbus(
+  service: ServiceEntry,
+): Promise<ServiceStatus> {
+  const objectPath = unitToObjectPath(service.unit);
+  let activeState = "unknown";
+  let subState = "unknown";
+  let description = "";
+
+  try {
+    [activeState, subState, description] = await Promise.all([
+      getUnitProperty(objectPath, "ActiveState"),
+      getUnitProperty(objectPath, "SubState"),
+      getUnitProperty(objectPath, "Description"),
+    ]);
+  } catch (err) {
+    console.error(`busctl get-property failed for ${service.unit}:`, err);
+    activeState = "error";
+    subState = "error";
+    description =
+      err instanceof Error ? err.message : "Failed to query service";
+  }
+
+  // Build a pseudo status summary (busctl has no equivalent of
+  // `systemctl status` with journal lines)
+  const raw = `${service.unit} - ${description}\n  Active: ${activeState} (${subState})`;
+
+  return { activeState, subState, description, raw };
+}
+
+async function executeServiceActionViaDbus(
+  service: ServiceEntry,
+  action: ServiceAction,
+): Promise<ActionResult> {
+  const method = DBUS_METHODS[action];
+  if (!method) {
+    return { success: false, message: `Invalid action: ${action}` };
+  }
+
+  try {
+    // busctl call org.freedesktop.systemd1 /org/freedesktop/systemd1 \
+    //   org.freedesktop.systemd1.Manager <Method> ss "<unit>" "replace"
+    await runBusctl([
+      "call",
+      "org.freedesktop.systemd1",
+      "/org/freedesktop/systemd1",
+      "org.freedesktop.systemd1.Manager",
+      method,
+      "ss",
+      service.unit,
+      "replace",
+    ]);
+    return {
+      success: true,
+      message: `Successfully executed '${action}' on ${service.alias} (${service.unit})`,
     };
   } catch (err: unknown) {
     const message =
