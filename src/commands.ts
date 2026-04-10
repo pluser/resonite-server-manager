@@ -116,6 +116,34 @@ function getStatusEmoji(activeState: string): string {
 }
 
 /**
+ * Format an uptime duration from microsecond timestamp to a human-readable string.
+ * @param activeEnterTimestampUsec - Microseconds since epoch when the unit became active
+ * @param now - Current time in milliseconds since epoch (defaults to Date.now())
+ * @returns A human-readable duration string, e.g. "2d 5h 30m" or "45m 12s"
+ */
+export function formatUptime(
+  activeEnterTimestampUsec: number,
+  now: number = Date.now(),
+): string {
+  const elapsedMs = now - activeEnterTimestampUsec / 1000;
+  if (elapsedMs < 0) return "0s";
+
+  const seconds = Math.floor(elapsedMs / 1000);
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0) parts.push(`${minutes}m`);
+  if (parts.length === 0 || (days === 0 && hours === 0)) parts.push(`${secs}s`);
+
+  return parts.join(" ");
+}
+
+/**
  * Resolve a service alias from the config.
  */
 function resolveService(
@@ -227,21 +255,34 @@ async function handleStatus(
   const status = await getServiceStatus(service);
   const emoji = getStatusEmoji(status.activeState);
 
+  const fields = [
+    {
+      name: "Unit",
+      value: `\`${service.unit}\``,
+      inline: true,
+    },
+    {
+      name: "State",
+      value: `${status.activeState} (${status.subState})`,
+      inline: true,
+    },
+  ];
+
+  if (
+    status.activeEnterTimestamp &&
+    (status.activeState === "active" || status.activeState === "activating")
+  ) {
+    fields.push({
+      name: "Uptime",
+      value: formatUptime(status.activeEnterTimestamp),
+      inline: true,
+    });
+  }
+
   const embed = new EmbedBuilder()
     .setTitle(`${emoji} ${service.alias}`)
     .setColor(getStatusColor(status.activeState))
-    .addFields(
-      {
-        name: "Unit",
-        value: `\`${service.unit}\``,
-        inline: true,
-      },
-      {
-        name: "State",
-        value: `${status.activeState} (${status.subState})`,
-        inline: true,
-      },
-    )
+    .addFields(...fields)
     .setTimestamp();
 
   if (status.description) {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildCommands } from "./commands.js";
+import { buildCommands, formatUptime } from "./commands.js";
 import type { Config } from "./config.js";
 
 function makeConfig(overrides: Partial<Config> = {}): Config {
@@ -67,5 +67,49 @@ describe("buildCommands", () => {
     const listOptions = (listSub as { options?: unknown[] }).options;
     // list has no options (no "name" param)
     expect(listOptions ?? []).toHaveLength(0);
+  });
+});
+
+describe("formatUptime", () => {
+  // Helper: create a usec timestamp that is `ms` milliseconds before `now`
+  function tsUsecAgo(ms: number, now: number): number {
+    return (now - ms) * 1000;
+  }
+
+  const NOW = new Date("2026-04-11T03:10:00+09:00").getTime();
+
+  it("formats seconds only", () => {
+    const ts = tsUsecAgo(45_000, NOW); // 45 seconds ago
+    expect(formatUptime(ts, NOW)).toBe("45s");
+  });
+
+  it("formats minutes and seconds", () => {
+    const ts = tsUsecAgo(5 * 60_000 + 30_000, NOW); // 5m 30s
+    expect(formatUptime(ts, NOW)).toBe("5m 30s");
+  });
+
+  it("formats hours, minutes, and seconds (drops seconds when hours present)", () => {
+    const ts = tsUsecAgo(2 * 3600_000 + 15 * 60_000 + 10_000, NOW); // 2h 15m 10s
+    expect(formatUptime(ts, NOW)).toBe("2h 15m");
+  });
+
+  it("formats days, hours, and minutes", () => {
+    const ts = tsUsecAgo(3 * 86400_000 + 5 * 3600_000 + 30 * 60_000, NOW);
+    expect(formatUptime(ts, NOW)).toBe("3d 5h 30m");
+  });
+
+  it("formats exactly 1 day", () => {
+    const ts = tsUsecAgo(86400_000, NOW);
+    expect(formatUptime(ts, NOW)).toBe("1d");
+  });
+
+  it("returns 0s for future timestamp", () => {
+    const ts = (NOW + 10_000) * 1000; // 10s in the future
+    expect(formatUptime(ts, NOW)).toBe("0s");
+  });
+
+  it("returns 0s for zero elapsed time", () => {
+    const ts = NOW * 1000;
+    expect(formatUptime(ts, NOW)).toBe("0s");
   });
 });

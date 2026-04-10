@@ -23,6 +23,11 @@ export interface ServiceStatus {
   description: string;
   /** Full `systemctl status` output (truncated for embed) */
   raw: string;
+  /**
+   * Timestamp (microseconds since epoch) when the unit last entered the
+   * active state, or 0 / undefined if unavailable.
+   */
+  activeEnterTimestamp?: number;
 }
 
 export interface ActionResult {
@@ -105,6 +110,24 @@ async function getUnitProperty(
 }
 
 /**
+ * Read a uint64 property from a systemd unit object via D-Bus.
+ * Returns the numeric value, or undefined on failure.
+ */
+async function getUnitPropertyUint64(
+  objectPath: string,
+  property: string,
+): Promise<number | undefined> {
+  const { stdout } = await runBusctl([
+    "get-property",
+    "org.freedesktop.systemd1",
+    objectPath,
+    "org.freedesktop.systemd1.Unit",
+    property,
+  ]);
+  return parseBusctlUint64(stdout);
+}
+
+/**
  * Parse a busctl string property output.
  *
  * busctl outputs string properties like: `s "active"`
@@ -113,6 +136,19 @@ async function getUnitProperty(
 export function parseBusctlString(output: string): string {
   const match = output.match(/^s\s+"(.*)"\s*$/);
   return match ? match[1] : output.trim();
+}
+
+/**
+ * Parse a busctl uint64 property output.
+ *
+ * busctl outputs uint64 properties like: `t 1712800000000000`
+ * Returns the numeric value, or undefined if parsing fails or value is 0.
+ */
+export function parseBusctlUint64(output: string): number | undefined {
+  const match = output.match(/^t\s+(\d+)\s*$/);
+  if (!match) return undefined;
+  const value = Number(match[1]);
+  return value > 0 ? value : undefined;
 }
 
 /**
@@ -133,16 +169,42 @@ export function unitToObjectPath(unit: string): string {
 }
 
 /**
- * Parse `systemctl show --property=ActiveState,SubState,Description` output.
+ * Parse a systemd human-readable timestamp string.
+ *
+ * systemd outputs timestamps like: "Fri 2026-04-11 00:00:00 JST"
+ * The format is: `Day YYYY-MM-DD HH:MM:SS TZ`
+ *
+ * Returns milliseconds since epoch, or undefined if unparseable.
+ */
+export function parseSystemdTimestamp(value: string): number | undefined {
+  // Extract "YYYY-MM-DD HH:MM:SS" portion; ignore day-of-week and TZ abbreviation
+  // since Date will parse the date/time portion and TZ abbreviations are unreliable.
+  // Instead, try parsing the full string first (some environments handle it).
+  // Fallback: extract the ISO-like portion and assume local time.
+  const match = value.match(
+    /(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})/,
+  );
+  if (!match) return undefined;
+
+  // Construct an ISO-ish string; interpret as local time by using the format
+  // that Date treats as local: "YYYY-MM-DDTHH:MM:SS"
+  const ms = new Date(`${match[1]}T${match[2]}`).getTime();
+  return Number.isNaN(ms) ? undefined : ms;
+}
+
+/**
+ * Parse `systemctl show` output for the properties we request.
  */
 export function parseSystemctlShow(stdout: string): {
   activeState: string;
   subState: string;
   description: string;
+  activeEnterTimestamp?: number;
 } {
   let activeState = "unknown";
   let subState = "unknown";
   let description = "";
+  let activeEnterTimestamp: number | undefined;
 
   for (const line of stdout.split("\n")) {
     const [key, ...rest] = line.split("=");
@@ -157,10 +219,22 @@ export function parseSystemctlShow(stdout: string): {
       case "Description":
         description = value;
         break;
+      case "ActiveEnterTimestamp": {
+        // systemctl show outputs a human-readable date string, e.g.
+        // "Thu 2024-01-01 12:00:00 UTC"
+        // Parse it into a usec-since-epoch value.
+        if (value) {
+          const ms = parseSystemdTimestamp(value);
+          if (ms !== undefined) {
+            activeEnterTimestamp = ms * 1000; // convert ms to usec
+          }
+        }
+        break;
+      }
     }
   }
 
-  return { activeState, subState, description };
+  return { activeState, subState, description, activeEnterTimestamp };
 }
 
 // ---------------------------------------------------------------------------
@@ -209,13 +283,15 @@ async function getServiceStatusViaSystemctl(
   let activeState = "unknown";
   let subState = "unknown";
   let description = "";
+  let activeEnterTimestamp: number | undefined;
 
   try {
     const { stdout } = await runSystemctl("show", service.unit, [
-      "--property=ActiveState,SubState,Description",
+      "--property=ActiveState,SubState,Description,ActiveEnterTimestamp",
       "--no-pager",
     ]);
-    ({ activeState, subState, description } = parseSystemctlShow(stdout));
+    ({ activeState, subState, description, activeEnterTimestamp } =
+      parseSystemctlShow(stdout));
   } catch (err) {
     console.error(`systemctl show failed for ${service.unit}:`, err);
     activeState = "error";
@@ -247,7 +323,7 @@ async function getServiceStatusViaSystemctl(
     }
   }
 
-  return { activeState, subState, description, raw };
+  return { activeState, subState, description, raw, activeEnterTimestamp };
 }
 
 async function executeServiceActionViaSystemctl(
@@ -295,13 +371,16 @@ async function getServiceStatusViaDbus(
   let activeState = "unknown";
   let subState = "unknown";
   let description = "";
+  let activeEnterTimestamp: number | undefined;
 
   try {
-    [activeState, subState, description] = await Promise.all([
-      getUnitProperty(objectPath, "ActiveState"),
-      getUnitProperty(objectPath, "SubState"),
-      getUnitProperty(objectPath, "Description"),
-    ]);
+    [activeState, subState, description, activeEnterTimestamp] =
+      await Promise.all([
+        getUnitProperty(objectPath, "ActiveState"),
+        getUnitProperty(objectPath, "SubState"),
+        getUnitProperty(objectPath, "Description"),
+        getUnitPropertyUint64(objectPath, "ActiveEnterTimestamp"),
+      ]);
   } catch (err) {
     console.error(`busctl get-property failed for ${service.unit}:`, err);
     activeState = "error";
@@ -314,7 +393,7 @@ async function getServiceStatusViaDbus(
   // `systemctl status` with journal lines)
   const raw = `${service.unit} - ${description}\n  Active: ${activeState} (${subState})`;
 
-  return { activeState, subState, description, raw };
+  return { activeState, subState, description, raw, activeEnterTimestamp };
 }
 
 async function executeServiceActionViaDbus(
