@@ -97,6 +97,7 @@ export async function getServiceStatus(
       }
     }
   } catch (err) {
+    console.error(`systemctl show failed for ${service.unit}:`, err);
     activeState = "error";
     subState = "error";
     description =
@@ -113,7 +114,7 @@ export async function getServiceStatus(
     raw = stdout;
   } catch (err: unknown) {
     // systemctl status returns exit code 3 for inactive services,
-    // but still provides useful output on stderr/stdout
+    // but still provides useful output on stdout
     if (
       err &&
       typeof err === "object" &&

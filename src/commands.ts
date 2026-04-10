@@ -329,26 +329,42 @@ async function handleList(
 ): Promise<void> {
   await interaction.deferReply();
 
-  // Fetch status for all services concurrently
-  const statuses = await Promise.all(
+  // Fetch status for all services concurrently.
+  // Use allSettled so a single failure does not abort the whole list.
+  const results = await Promise.allSettled(
     config.services.map(async (service) => {
       const status = await getServiceStatus(service);
       return { service, status };
     }),
   );
 
+  const lines: string[] = [];
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
+    if (result.status === "fulfilled") {
+      const { service, status } = result.value;
+      const emoji = getStatusEmoji(status.activeState);
+      const desc = service.description ? ` - ${service.description}` : "";
+      lines.push(
+        `${emoji} **${service.alias}** (\`${service.unit}\`): ${status.activeState}${desc}`,
+      );
+    } else {
+      const service = config.services[i];
+      console.error(
+        `Failed to get status for ${service.alias} (${service.unit}):`,
+        result.reason,
+      );
+      lines.push(
+        `\u2753 **${service.alias}** (\`${service.unit}\`): error`,
+      );
+    }
+  }
+
   const embed = new EmbedBuilder()
     .setTitle("Managed Services")
     .setColor(0x5865f2)
-    .setTimestamp();
-
-  const lines = statuses.map(({ service, status }) => {
-    const emoji = getStatusEmoji(status.activeState);
-    const desc = service.description ? ` - ${service.description}` : "";
-    return `${emoji} **${service.alias}** (\`${service.unit}\`): ${status.activeState}${desc}`;
-  });
-
-  embed.setDescription(lines.join("\n"));
+    .setTimestamp()
+    .setDescription(lines.join("\n"));
 
   await interaction.editReply({ embeds: [embed] });
 }
