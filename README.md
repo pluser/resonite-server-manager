@@ -19,7 +19,11 @@ Discord bot for managing systemd services via slash commands. Services are contr
 1. Create a Discord application at https://discord.com/developers/applications
 2. Create a bot and copy the token
 3. Copy the Application ID (Client ID)
-4. Invite the bot to your server with the `applications.commands` and `bot` scopes
+4. Invite the bot to your server using the **OAuth2 > URL Generator**:
+   - **Scopes**: `bot`, `applications.commands`
+   - **Bot Permissions**: `Send Messages`, `Embed Links`
+
+No Privileged Gateway Intents are required.
 
 ### 2. Configuration
 
