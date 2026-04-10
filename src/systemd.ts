@@ -101,9 +101,18 @@ async function getUnitProperty(
     "org.freedesktop.systemd1.Unit",
     property,
   ]);
-  // busctl output looks like: s "active"
-  const match = stdout.match(/^s\s+"(.*)"\s*$/);
-  return match ? match[1] : stdout.trim();
+  return parseBusctlString(stdout);
+}
+
+/**
+ * Parse a busctl string property output.
+ *
+ * busctl outputs string properties like: `s "active"`
+ * This extracts and returns the unquoted value.
+ */
+export function parseBusctlString(output: string): string {
+  const match = output.match(/^s\s+"(.*)"\s*$/);
+  return match ? match[1] : output.trim();
 }
 
 /**
@@ -112,7 +121,7 @@ async function getUnitProperty(
  * systemd escapes unit names for D-Bus: every byte that is not [A-Za-z0-9]
  * is replaced with `_XX` where XX is the hex value.
  */
-function unitToObjectPath(unit: string): string {
+export function unitToObjectPath(unit: string): string {
   const escaped = Array.from(unit)
     .map((ch) =>
       /[A-Za-z0-9]/.test(ch)
@@ -121,6 +130,37 @@ function unitToObjectPath(unit: string): string {
     )
     .join("");
   return `/org/freedesktop/systemd1/unit/${escaped}`;
+}
+
+/**
+ * Parse `systemctl show --property=ActiveState,SubState,Description` output.
+ */
+export function parseSystemctlShow(stdout: string): {
+  activeState: string;
+  subState: string;
+  description: string;
+} {
+  let activeState = "unknown";
+  let subState = "unknown";
+  let description = "";
+
+  for (const line of stdout.split("\n")) {
+    const [key, ...rest] = line.split("=");
+    const value = rest.join("=");
+    switch (key) {
+      case "ActiveState":
+        activeState = value;
+        break;
+      case "SubState":
+        subState = value;
+        break;
+      case "Description":
+        description = value;
+        break;
+    }
+  }
+
+  return { activeState, subState, description };
 }
 
 // ---------------------------------------------------------------------------
@@ -175,21 +215,7 @@ async function getServiceStatusViaSystemctl(
       "--property=ActiveState,SubState,Description",
       "--no-pager",
     ]);
-    for (const line of stdout.split("\n")) {
-      const [key, ...rest] = line.split("=");
-      const value = rest.join("=");
-      switch (key) {
-        case "ActiveState":
-          activeState = value;
-          break;
-        case "SubState":
-          subState = value;
-          break;
-        case "Description":
-          description = value;
-          break;
-      }
-    }
+    ({ activeState, subState, description } = parseSystemctlShow(stdout));
   } catch (err) {
     console.error(`systemctl show failed for ${service.unit}:`, err);
     activeState = "error";

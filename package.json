@@ -6,9 +6,14 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "test": "vitest run"
   },
-  "keywords": ["discord", "systemd", "service-manager"],
+  "keywords": [
+    "discord",
+    "systemd",
+    "service-manager"
+  ],
   "license": "MIT",
   "dependencies": {
     "discord.js": "^14.18.0",
@@ -17,6 +22,7 @@
   "devDependencies": {
     "@types/node": "^22.14.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.8.0"
+    "typescript": "^5.8.0",
+    "vitest": "^4.1.4"
   }
 }
