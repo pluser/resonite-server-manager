@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, REST, Routes } from "discord.js";
+import { Client, GatewayIntentBits, MessageFlags, REST, Routes } from "discord.js";
 import { loadConfig } from "./config.js";
 import { buildCommands, handleServiceCommand } from "./commands.js";
 
@@ -53,7 +53,7 @@ async function main(): Promise<void> {
           await interaction.editReply({ content: errorMessage }).catch(() => {});
         } else {
           await interaction
-            .reply({ content: errorMessage, ephemeral: true })
+            .reply({ content: errorMessage, flags: MessageFlags.Ephemeral })
             .catch(() => {});
         }
       }

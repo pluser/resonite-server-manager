@@ -2,6 +2,7 @@ import {
   SlashCommandBuilder,
   ChatInputCommandInteraction,
   EmbedBuilder,
+  MessageFlags,
   type RESTPostAPIChatInputApplicationCommandsJSONBody,
 } from "discord.js";
 import type { Config, ServiceEntry } from "./config.js";
@@ -184,7 +185,7 @@ export async function handleServiceCommand(
           )
           .setColor(0xed4245),
       ],
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     return;
   }
@@ -195,7 +196,7 @@ export async function handleServiceCommand(
   if (!service) {
     await interaction.reply({
       content: `Unknown service: ${alias}`,
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
     return;
   }
@@ -212,7 +213,7 @@ export async function handleServiceCommand(
     default:
       await interaction.reply({
         content: `Unknown subcommand: ${subcommand}`,
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
   }
 }
