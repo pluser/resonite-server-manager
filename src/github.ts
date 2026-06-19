@@ -1,8 +1,7 @@
 export interface TriggerBuildResult {
   success: boolean;
   message: string;
-  runUrl?: string;
-  runId?: number;
+  dispatchedAt?: number;
 }
 
 export async function triggerWorkflowDispatch(options: {
@@ -15,6 +14,7 @@ export async function triggerWorkflowDispatch(options: {
 }): Promise<TriggerBuildResult> {
   const { owner, repo, workflowId, ref, token, inputs } = options;
   const url = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${workflowId}/dispatches`;
+  const dispatchedAt = Date.now();
 
   const body: Record<string, unknown> = { ref };
   if (inputs && Object.keys(inputs).length > 0) {
@@ -37,16 +37,15 @@ export async function triggerWorkflowDispatch(options: {
     return {
       success: false,
       message: `Network error: ${err instanceof Error ? err.message : String(err)}`,
+      dispatchedAt,
     };
   }
 
   if (response.status === 204) {
-    const runInfo = await fetchLatestRunInfo({ owner, repo, workflowId, ref, token });
     return {
       success: true,
       message: `Build triggered on ref \`${ref}\``,
-      runUrl: runInfo?.htmlUrl ?? undefined,
-      runId: runInfo?.id ?? undefined,
+      dispatchedAt,
     };
   }
 
@@ -73,7 +72,7 @@ export async function triggerWorkflowDispatch(options: {
       message = `GitHub API error (${response.status}): ${errorBody || response.statusText}`;
   }
 
-  return { success: false, message };
+  return { success: false, message, dispatchedAt };
 }
 
 export interface WorkflowRunInfo {
@@ -131,6 +130,31 @@ async function fetchLatestRunInfo(options: {
   } catch {
     return null;
   }
+}
+
+export async function waitForNewWorkflowRun(
+  options: {
+    owner: string;
+    repo: string;
+    workflowId: string;
+    ref: string;
+    token: string;
+  },
+  dispatchedAt: number,
+  pollIntervalMs: number = 5_000,
+  maxWaitMs: number = 60_000,
+): Promise<WorkflowRunInfo | null> {
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < maxWaitMs) {
+    const runInfo = await fetchLatestRunInfo(options);
+    if (runInfo && new Date(runInfo.createdAt).getTime() > dispatchedAt) {
+      return runInfo;
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+
+  return null;
 }
 
 export async function getWorkflowRunStatus(options: {
