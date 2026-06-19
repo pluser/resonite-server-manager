@@ -42,6 +42,12 @@ const configSchema = z.object({
    * Whitelisted services. Only these services can be managed via Discord.
    */
   services: z.array(serviceEntrySchema).min(1),
+  /** GitHub PAT with repo scope for triggering workflow_dispatch. */
+  githubToken: z.string().min(1),
+  /** Repository in "owner/repo" format to trigger builds for. */
+  buildRepo: z.string().min(1).default("pluser/resonite-headless-container"),
+  /** Workflow file name or ID to dispatch. */
+  buildWorkflow: z.string().min(1).default("docker.yml"),
 });
 
 export type ServiceEntry = z.infer<typeof serviceEntrySchema>;

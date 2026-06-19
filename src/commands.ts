@@ -11,6 +11,7 @@ import {
   executeServiceAction,
   type ServiceAction,
 } from "./systemd.js";
+import { triggerWorkflowDispatch, getWorkflowRunStatus, type WorkflowRunInfo } from "./github.js";
 
 /**
  * Build the slash command definitions based on the configured services.
@@ -79,7 +80,17 @@ export function buildCommands(
       sub.setName("list").setDescription("List all managed services"),
     );
 
-  return [serviceCommand.toJSON()];
+  const buildCommand = new SlashCommandBuilder()
+    .setName("build")
+    .setDescription("Trigger a Docker image build for resonite-headless-container")
+    .addStringOption((opt) =>
+      opt
+        .setName("ref")
+        .setDescription("Branch or tag to build (default: main)")
+        .setRequired(false),
+    );
+
+  return [serviceCommand.toJSON(), buildCommand.toJSON()];
 }
 
 /** Color codes for embed status indicators */
@@ -409,4 +420,245 @@ async function handleList(
     .setDescription(lines.join("\n"));
 
   await interaction.editReply({ embeds: [embed] });
+}
+
+/**
+ * Handle the /build command interaction.
+ */
+export async function handleBuildCommand(
+  interaction: ChatInputCommandInteraction,
+  config: Config,
+): Promise<void> {
+  if (!isAuthorized(interaction, config)) {
+    await interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("Access Denied")
+          .setDescription("You do not have permission to trigger builds.")
+          .setColor(0xed4245),
+      ],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  await interaction.deferReply();
+
+  const ref = interaction.options.getString("ref") ?? "main";
+  const [owner, repo] = config.buildRepo.split("/");
+
+  const result = await triggerWorkflowDispatch({
+    owner,
+    repo,
+    workflowId: config.buildWorkflow,
+    ref,
+    token: config.githubToken,
+  });
+
+  if (!result.success) {
+    const embed = new EmbedBuilder()
+      .setTitle("Build Failed")
+      .setDescription(result.message)
+      .setColor(0xed4245)
+      .addFields(
+        { name: "Repository", value: `\`${config.buildRepo}\``, inline: true },
+        { name: "Ref", value: `\`${ref}\``, inline: true },
+      )
+      .setTimestamp()
+      .setFooter({ text: `Triggered by ${interaction.user.tag}` });
+
+    await interaction.editReply({ embeds: [embed] });
+    return;
+  }
+
+  if (!result.runId) {
+    const embed = new EmbedBuilder()
+      .setTitle("\u{1F680} Build Triggered")
+      .setDescription(result.message)
+      .setColor(0x57f287)
+      .addFields(
+        { name: "Repository", value: `\`${config.buildRepo}\``, inline: true },
+        { name: "Ref", value: `\`${ref}\``, inline: true },
+        { name: "Workflow", value: `\`${config.buildWorkflow}\``, inline: true },
+      )
+      .setTimestamp()
+      .setFooter({ text: `Triggered by ${interaction.user.tag}` });
+
+    if (result.runUrl) {
+      embed.setURL(result.runUrl);
+    }
+
+    await interaction.editReply({ embeds: [embed] });
+    return;
+  }
+
+  await pollBuildProgress(interaction, config, result.runId, result.runUrl, ref);
+}
+
+function getBuildStatusEmoji(status: string, conclusion: string | null): string {
+  if (status === "completed") {
+    switch (conclusion) {
+      case "success":
+        return "\u{2705}";
+      case "failure":
+        return "\u274C";
+      case "cancelled":
+        return "\u{1F6D1}";
+      case "skipped":
+        return "\u23E9";
+      default:
+        return "\u2753";
+    }
+  }
+  switch (status) {
+    case "queued":
+      return "\u23F3";
+    case "in_progress":
+      return "\u2699\uFE0F";
+    case "waiting":
+      return "\u23F8\uFE0F";
+    default:
+      return "\u2753";
+  }
+}
+
+function getBuildColor(status: string, conclusion: string | null): number {
+  if (status === "completed") {
+    switch (conclusion) {
+      case "success":
+        return 0x57f287;
+      case "failure":
+      case "cancelled":
+        return 0xed4245;
+      default:
+        return 0x95a5a6;
+    }
+  }
+  return 0xfee75c;
+}
+
+function formatBuildStatus(run: WorkflowRunInfo, elapsedMs: number): string {
+  if (run.status === "completed" && run.conclusion) {
+    return `Completed: \`${run.conclusion}\``;
+  }
+  const statusText = run.status === "queued" ? "Queued" : "In Progress";
+  const elapsed = formatElapsed(elapsedMs);
+  return `${statusText} (${elapsed})`;
+}
+
+function formatElapsed(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  if (minutes > 0) {
+    return `${minutes}m ${secs}s`;
+  }
+  return `${secs}s`;
+}
+
+async function pollBuildProgress(
+  interaction: ChatInputCommandInteraction,
+  config: Config,
+  runId: number,
+  runUrl: string | undefined,
+  ref: string,
+): Promise<void> {
+  const [owner, repo] = config.buildRepo.split("/");
+  const startTime = Date.now();
+  const pollIntervalMs = 10_000;
+  const maxPollDurationMs = 30 * 60 * 1000;
+
+  const initialEmbed = new EmbedBuilder()
+    .setTitle("\u{23F3} Build Triggered")
+    .setDescription("Waiting for the workflow to start...")
+    .setColor(0xfee75c)
+    .addFields(
+      { name: "Repository", value: `\`${config.buildRepo}\``, inline: true },
+      { name: "Ref", value: `\`${ref}\``, inline: true },
+      { name: "Workflow", value: `\`${config.buildWorkflow}\``, inline: true },
+    )
+    .setTimestamp()
+    .setFooter({ text: `Triggered by ${interaction.user.tag}` });
+
+  if (runUrl) {
+    initialEmbed.setURL(runUrl);
+  }
+
+  await interaction.editReply({ embeds: [initialEmbed] });
+
+  let lastUpdateTime = 0;
+
+  while (true) {
+    const elapsed = Date.now() - startTime;
+    if (elapsed > maxPollDurationMs) {
+      const timeoutEmbed = new EmbedBuilder()
+        .setTitle("Build Timeout")
+        .setDescription("The build is taking too long. Please check the workflow run directly.")
+        .setColor(0xed4245)
+        .addFields(
+          { name: "Elapsed", value: formatElapsed(elapsed), inline: true },
+        )
+        .setTimestamp();
+
+      if (runUrl) {
+        timeoutEmbed.setURL(runUrl);
+      }
+
+      await interaction.editReply({ embeds: [timeoutEmbed] });
+      return;
+    }
+
+    const runInfo = await getWorkflowRunStatus({
+      owner,
+      repo,
+      runId,
+      token: config.githubToken,
+    });
+
+    if (!runInfo) {
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+      continue;
+    }
+
+    const now = Date.now();
+    const shouldUpdate = now - lastUpdateTime >= pollIntervalMs || runInfo.status === "completed";
+
+    if (shouldUpdate) {
+      lastUpdateTime = now;
+      const emoji = getBuildStatusEmoji(runInfo.status, runInfo.conclusion);
+      const color = getBuildColor(runInfo.status, runInfo.conclusion);
+
+      const embed = new EmbedBuilder()
+        .setTitle(`${emoji} Build ${runInfo.status === "completed" ? "Completed" : "In Progress"}`)
+        .setDescription(formatBuildStatus(runInfo, elapsed))
+        .setColor(color)
+        .addFields(
+          { name: "Repository", value: `\`${config.buildRepo}\``, inline: true },
+          { name: "Ref", value: `\`${ref}\``, inline: true },
+          { name: "Elapsed", value: formatElapsed(elapsed), inline: true },
+        )
+        .setTimestamp()
+        .setFooter({ text: `Triggered by ${interaction.user.tag}` });
+
+      if (runInfo.htmlUrl) {
+        embed.setURL(runInfo.htmlUrl);
+      }
+
+      if (runInfo.conclusion) {
+        embed.addFields({ name: "Conclusion", value: `\`${runInfo.conclusion}\``, inline: true });
+      }
+
+      try {
+        await interaction.editReply({ embeds: [embed] });
+      } catch {
+        return;
+      }
+
+      if (runInfo.status === "completed") {
+        return;
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
 }

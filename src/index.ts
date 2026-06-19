@@ -1,6 +1,6 @@
 import { Client, GatewayIntentBits, MessageFlags, REST, Routes } from "discord.js";
 import { loadConfig } from "./config.js";
-import { buildCommands, handleServiceCommand } from "./commands.js";
+import { buildCommands, handleServiceCommand, handleBuildCommand } from "./commands.js";
 
 async function main(): Promise<void> {
   // Load configuration
@@ -47,6 +47,23 @@ async function main(): Promise<void> {
         await handleServiceCommand(interaction, config);
       } catch (err) {
         console.error("Error handling service command:", err);
+        const errorMessage =
+          "An unexpected error occurred while processing the command.";
+        if (interaction.deferred || interaction.replied) {
+          await interaction.editReply({ content: errorMessage }).catch(() => {});
+        } else {
+          await interaction
+            .reply({ content: errorMessage, flags: MessageFlags.Ephemeral })
+            .catch(() => {});
+        }
+      }
+    }
+
+    if (interaction.commandName === "build") {
+      try {
+        await handleBuildCommand(interaction, config);
+      } catch (err) {
+        console.error("Error handling build command:", err);
         const errorMessage =
           "An unexpected error occurred while processing the command.";
         if (interaction.deferred || interaction.replied) {
