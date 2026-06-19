@@ -4,6 +4,9 @@
   "guildIds": ["YOUR_GUILD_ID"],
   "allowedRoleIds": ["ROLE_ID_FOR_ADMINS"],
   "allowedUserIds": ["YOUR_DISCORD_USER_ID"],
+  "githubToken": "ghp_YOUR_GITHUB_PERSONAL_ACCESS_TOKEN",
+  "buildRepo": "pluser/resonite-headless-container",
+  "buildWorkflow": "docker.yml",
   "services": [
     {
       "alias": "Resonite Headless",
@@ -15,5 +18,7 @@
       "unit": "nginx.service",
       "description": "Nginx web server"
     }
+  ]
+}
   ]
 }

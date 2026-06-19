@@ -14,6 +14,7 @@ function writeTempConfig(data: unknown): string {
 const VALID_CONFIG = {
   discordToken: "test-token",
   clientId: "123456789",
+  githubToken: "ghp_test-token",
   services: [
     { alias: "Test Service", unit: "test.service" },
   ],
@@ -51,6 +52,8 @@ describe("loadConfig", () => {
       guildIds: ["guild1", "guild2"],
       allowedRoleIds: ["role1"],
       allowedUserIds: ["user1"],
+      buildRepo: "custom/repo",
+      buildWorkflow: "build.yml",
       services: [
         { alias: "Svc A", unit: "a.service", description: "Service A" },
         { alias: "Svc B", unit: "b.service" },
@@ -63,9 +66,29 @@ describe("loadConfig", () => {
     expect(config.guildIds).toEqual(["guild1", "guild2"]);
     expect(config.allowedRoleIds).toEqual(["role1"]);
     expect(config.allowedUserIds).toEqual(["user1"]);
+    expect(config.buildRepo).toBe("custom/repo");
+    expect(config.buildWorkflow).toBe("build.yml");
     expect(config.services).toHaveLength(2);
     expect(config.services[0].description).toBe("Service A");
     expect(config.services[1].description).toBeUndefined();
+  });
+
+  it("applies default values for buildRepo and buildWorkflow", () => {
+    const path = writeTempConfig(VALID_CONFIG);
+    tempFiles.push(path);
+    const config = loadConfig(path);
+
+    expect(config.buildRepo).toBe("pluser/resonite-headless-container");
+    expect(config.buildWorkflow).toBe("docker.yml");
+  });
+
+  it("applies default values for buildRepo and buildWorkflow", () => {
+    const path = writeTempConfig(VALID_CONFIG);
+    tempFiles.push(path);
+    const config = loadConfig(path);
+
+    expect(config.buildRepo).toBe("pluser/resonite-headless-container");
+    expect(config.buildWorkflow).toBe("docker.yml");
   });
 
   it("throws on missing file", () => {

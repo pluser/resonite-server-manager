@@ -11,6 +11,7 @@ import {
   executeServiceAction,
   type ServiceAction,
 } from "./systemd.js";
+import { triggerWorkflowDispatch } from "./github.js";
 
 /**
  * Build the slash command definitions based on the configured services.
@@ -79,7 +80,17 @@ export function buildCommands(
       sub.setName("list").setDescription("List all managed services"),
     );
 
-  return [serviceCommand.toJSON()];
+  const buildCommand = new SlashCommandBuilder()
+    .setName("build")
+    .setDescription("Trigger a Docker image build for resonite-headless-container")
+    .addStringOption((opt) =>
+      opt
+        .setName("ref")
+        .setDescription("Branch or tag to build (default: main)")
+        .setRequired(false),
+    );
+
+  return [serviceCommand.toJSON(), buildCommand.toJSON()];
 }
 
 /** Color codes for embed status indicators */
@@ -409,4 +420,71 @@ async function handleList(
     .setDescription(lines.join("\n"));
 
   await interaction.editReply({ embeds: [embed] });
+}
+
+/**
+ * Handle the /build command interaction.
+ */
+export async function handleBuildCommand(
+  interaction: ChatInputCommandInteraction,
+  config: Config,
+): Promise<void> {
+  if (!isAuthorized(interaction, config)) {
+    await interaction.reply({
+      embeds: [
+        new EmbedBuilder()
+          .setTitle("Access Denied")
+          .setDescription("You do not have permission to trigger builds.")
+          .setColor(0xed4245),
+      ],
+      flags: MessageFlags.Ephemeral,
+    });
+    return;
+  }
+
+  await interaction.deferReply();
+
+  const ref = interaction.options.getString("ref") ?? "main";
+  const [owner, repo] = config.buildRepo.split("/");
+
+  const result = await triggerWorkflowDispatch({
+    owner,
+    repo,
+    workflowId: config.buildWorkflow,
+    ref,
+    token: config.githubToken,
+  });
+
+  if (result.success) {
+    const embed = new EmbedBuilder()
+      .setTitle("\u{1F680} Build Triggered")
+      .setDescription(result.message)
+      .setColor(0x57f287)
+      .addFields(
+        { name: "Repository", value: `\`${config.buildRepo}\``, inline: true },
+        { name: "Ref", value: `\`${ref}\``, inline: true },
+        { name: "Workflow", value: `\`${config.buildWorkflow}\``, inline: true },
+      )
+      .setTimestamp()
+      .setFooter({ text: `Triggered by ${interaction.user.tag}` });
+
+    if (result.runUrl) {
+      embed.setURL(result.runUrl);
+    }
+
+    await interaction.editReply({ embeds: [embed] });
+  } else {
+    const embed = new EmbedBuilder()
+      .setTitle("Build Failed")
+      .setDescription(result.message)
+      .setColor(0xed4245)
+      .addFields(
+        { name: "Repository", value: `\`${config.buildRepo}\``, inline: true },
+        { name: "Ref", value: `\`${ref}\``, inline: true },
+      )
+      .setTimestamp()
+      .setFooter({ text: `Triggered by ${interaction.user.tag}` });
+
+    await interaction.editReply({ embeds: [embed] });
+  }
 }

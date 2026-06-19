@@ -6,6 +6,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
     discordToken: "test-token",
     clientId: "123456789",
+    githubToken: "ghp_test-token",
     services: [
       { alias: "Resonite Headless", unit: "resonite-headless.service" },
       { alias: "Nginx", unit: "nginx.service", description: "Web server" },
@@ -15,14 +16,47 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
 }
 
 describe("buildCommands", () => {
-  it("returns an array with one command", () => {
+  it("returns an array with two commands", () => {
     const commands = buildCommands(makeConfig());
-    expect(commands).toHaveLength(1);
+    expect(commands).toHaveLength(2);
   });
 
   it("builds a command named 'service'", () => {
     const commands = buildCommands(makeConfig());
     expect(commands[0].name).toBe("service");
+  });
+
+  it("builds a command named 'build'", () => {
+    const commands = buildCommands(makeConfig());
+    expect(commands[1].name).toBe("build");
+  });
+
+  it("build command has optional ref option", () => {
+    const commands = buildCommands(makeConfig());
+    const buildCmd = commands[1];
+    expect(buildCmd.options).toBeDefined();
+    const refOpt = buildCmd.options!.find((o) => o.name === "ref");
+    expect(refOpt).toBeDefined();
+    expect(refOpt!.required).toBe(false);
+  });
+
+  it("builds a command named 'service'", () => {
+    const commands = buildCommands(makeConfig());
+    expect(commands[0].name).toBe("service");
+  });
+
+  it("builds a command named 'build'", () => {
+    const commands = buildCommands(makeConfig());
+    expect(commands[1].name).toBe("build");
+  });
+
+  it("build command has optional ref option", () => {
+    const commands = buildCommands(makeConfig());
+    const buildCmd = commands[1];
+    expect(buildCmd.options).toBeDefined();
+    const refOpt = buildCmd.options!.find((o) => o.name === "ref");
+    expect(refOpt).toBeDefined();
+    expect(refOpt!.required).toBe(false);
   });
 
   it("includes all subcommands", () => {
