@@ -2,6 +2,7 @@ export interface TriggerBuildResult {
   success: boolean;
   message: string;
   runUrl?: string;
+  runId?: number;
 }
 
 export async function triggerWorkflowDispatch(options: {
@@ -40,11 +41,12 @@ export async function triggerWorkflowDispatch(options: {
   }
 
   if (response.status === 204) {
-    const runUrl = await fetchLatestRunUrl({ owner, repo, workflowId, ref, token });
+    const runInfo = await fetchLatestRunInfo({ owner, repo, workflowId, ref, token });
     return {
       success: true,
       message: `Build triggered on ref \`${ref}\``,
-      runUrl: runUrl ?? undefined,
+      runUrl: runInfo?.htmlUrl ?? undefined,
+      runId: runInfo?.id ?? undefined,
     };
   }
 
@@ -74,13 +76,22 @@ export async function triggerWorkflowDispatch(options: {
   return { success: false, message };
 }
 
-async function fetchLatestRunUrl(options: {
+export interface WorkflowRunInfo {
+  id: number;
+  htmlUrl: string;
+  status: string;
+  conclusion: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+async function fetchLatestRunInfo(options: {
   owner: string;
   repo: string;
   workflowId: string;
   ref: string;
   token: string;
-}): Promise<string | null> {
+}): Promise<WorkflowRunInfo | null> {
   const { owner, repo, workflowId, ref, token } = options;
   const url = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${workflowId}/runs?branch=${encodeURIComponent(ref)}&per_page=1&event=workflow_dispatch`;
 
@@ -96,9 +107,69 @@ async function fetchLatestRunUrl(options: {
     if (!response.ok) return null;
 
     const data = (await response.json()) as {
-      workflow_runs?: Array<{ html_url: string; created_at: string }>;
+      workflow_runs?: Array<{
+        id: number;
+        html_url: string;
+        status: string;
+        conclusion: string | null;
+        created_at: string;
+        updated_at: string;
+      }>;
     };
-    return data.workflow_runs?.[0]?.html_url ?? null;
+
+    const run = data.workflow_runs?.[0];
+    if (!run) return null;
+
+    return {
+      id: run.id,
+      htmlUrl: run.html_url,
+      status: run.status,
+      conclusion: run.conclusion,
+      createdAt: run.created_at,
+      updatedAt: run.updated_at,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function getWorkflowRunStatus(options: {
+  owner: string;
+  repo: string;
+  runId: number;
+  token: string;
+}): Promise<WorkflowRunInfo | null> {
+  const { owner, repo, runId, token } = options;
+  const url = `https://api.github.com/repos/${owner}/${repo}/actions/runs/${runId}`;
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
+
+    if (!response.ok) return null;
+
+    const data = (await response.json()) as {
+      id: number;
+      html_url: string;
+      status: string;
+      conclusion: string | null;
+      created_at: string;
+      updated_at: string;
+    };
+
+    return {
+      id: data.id,
+      htmlUrl: data.html_url,
+      status: data.status,
+      conclusion: data.conclusion,
+      createdAt: data.created_at,
+      updatedAt: data.updated_at,
+    };
   } catch {
     return null;
   }
