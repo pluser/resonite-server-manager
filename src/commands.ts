@@ -11,7 +11,7 @@ import {
   executeServiceAction,
   type ServiceAction,
 } from "./systemd.js";
-import { triggerWorkflowDispatch, getWorkflowRunStatus, type WorkflowRunInfo } from "./github.js";
+import { triggerWorkflowDispatch, getWorkflowRunStatus, waitForNewWorkflowRun, type WorkflowRunInfo } from "./github.js";
 
 /**
  * Build the slash command definitions based on the configured services.
@@ -471,10 +471,31 @@ export async function handleBuildCommand(
     return;
   }
 
-  if (!result.runId) {
+  const dispatchedAt = result.dispatchedAt ?? Date.now();
+
+  const initialEmbed = new EmbedBuilder()
+    .setTitle("\u{23F3} Build Triggered")
+    .setDescription("Waiting for the workflow run to appear...")
+    .setColor(0xfee75c)
+    .addFields(
+      { name: "Repository", value: `\`${config.buildRepo}\``, inline: true },
+      { name: "Ref", value: `\`${ref}\``, inline: true },
+      { name: "Workflow", value: `\`${config.buildWorkflow}\``, inline: true },
+    )
+    .setTimestamp()
+    .setFooter({ text: `Triggered by ${interaction.user.tag}` });
+
+  await interaction.editReply({ embeds: [initialEmbed] });
+
+  const runInfo = await waitForNewWorkflowRun(
+    { owner, repo, workflowId: config.buildWorkflow, ref, token: config.githubToken },
+    dispatchedAt,
+  );
+
+  if (!runInfo) {
     const embed = new EmbedBuilder()
       .setTitle("\u{1F680} Build Triggered")
-      .setDescription(result.message)
+      .setDescription("Build triggered but the workflow run did not appear within the timeout. Please check the Actions tab directly.")
       .setColor(0x57f287)
       .addFields(
         { name: "Repository", value: `\`${config.buildRepo}\``, inline: true },
@@ -484,15 +505,11 @@ export async function handleBuildCommand(
       .setTimestamp()
       .setFooter({ text: `Triggered by ${interaction.user.tag}` });
 
-    if (result.runUrl) {
-      embed.setURL(result.runUrl);
-    }
-
     await interaction.editReply({ embeds: [embed] });
     return;
   }
 
-  await pollBuildProgress(interaction, config, result.runId, result.runUrl, ref);
+  await pollBuildProgress(interaction, config, runInfo.id, runInfo.htmlUrl, ref);
 }
 
 function getBuildStatusEmoji(status: string, conclusion: string | null): string {
