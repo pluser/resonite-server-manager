@@ -9,6 +9,7 @@ Discord bot for managing systemd services via slash commands. Services are contr
 - `/service stop <name>` - Stop a service
 - `/service restart <name>` - Restart a service
 - `/service list` - List all managed services with their current status
+- `/build [ref]` - Trigger a Docker image build via GitHub Actions and track progress in real-time
 - Whitelist-based service access with human-friendly aliases
 - Role-based and user-based authorization
 
@@ -42,6 +43,9 @@ Edit `config.json`:
 | `guildIds` | No | Guild IDs for guild-specific commands (recommended for testing; instant updates) |
 | `allowedRoleIds` | No | Discord role IDs authorized to manage services |
 | `allowedUserIds` | No | Discord user IDs authorized to manage services |
+| `githubToken` | Yes | GitHub PAT with `repo` scope for triggering workflow builds |
+| `buildRepo` | No | Repository (`owner/repo`) to trigger builds for (default: `pluser/resonite-headless-container`) |
+| `buildWorkflow` | No | Workflow file name or ID to dispatch (default: `docker.yml`) |
 | `services` | Yes | Array of whitelisted service entries |
 
 Each service entry:
